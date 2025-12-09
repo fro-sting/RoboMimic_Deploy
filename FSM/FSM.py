@@ -10,6 +10,7 @@ from policy.skill_cast.SkillCast import SkillCast
 from policy.kick.Kick import Kick
 from policy.kungfu2.KungFu2 import KungFu2
 from policy.beyond_mimic.BeyondMimic import BeyondMimic
+from policy.MotionTracking.MotionTracking import MotionTracking
 from FSM.FSMState import *
 import time
 from common.ctrlcomp import *
@@ -39,6 +40,7 @@ class FSM:
         self.kick_policy = Kick(state_cmd, policy_output)
         self.kungfu2_policy = KungFu2(state_cmd, policy_output)
         self.beyond_mimic_policy = BeyondMimic(state_cmd, policy_output)
+        self.motiontracking_policy = MotionTracking(state_cmd, policy_output)
         
         print("initalized all policies!!!")
         
@@ -99,8 +101,16 @@ class FSM:
             self.cur_policy = self.kungfu2_policy
         elif((policy_name == FSMStateName.SKILL_BEYOND_MIMIC)):
             self.cur_policy = self.beyond_mimic_policy
+        elif((policy_name == FSMStateName.SKILL_MotionTracking)):
+            self.cur_policy = self.motiontracking_policy
         else:
             pass
+    
+    def set_mujoco_data(self, mj_data, mj_model):
+        """设置MuJoCo数据引用，用于需要body位置的策略"""
+        # MotionTracking需要MuJoCo数据来获取body位置
+        if hasattr(self.motiontracking_policy, 'set_mujoco_data'):
+            self.motiontracking_policy.set_mujoco_data(mj_data, mj_model)
             
         
         

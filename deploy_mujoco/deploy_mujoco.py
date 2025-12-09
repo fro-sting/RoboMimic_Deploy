@@ -13,7 +13,7 @@ import os
 from common.ctrlcomp import *
 from FSM.FSM import *
 from common.utils import get_gravity_orientation
-from common.joystick import JoyStick, JoystickButton
+from common.keyboard import KeyBoard, KeyboardKey
 
 
 
@@ -44,34 +44,66 @@ if __name__ == "__main__":
     policy_output = PolicyOutput(num_joints)
     FSM_controller = FSM(state_cmd, policy_output)
     
-    joystick = JoyStick()
+    # 设置MuJoCo数据引用，用于MotionTracking等需要body位置的策略
+    FSM_controller.set_mujoco_data(d, m)
+    
+    keyboard = KeyBoard()
     Running = True
     with mujoco.viewer.launch_passive(m, d) as viewer:
         sim_start_time = time.time()
         while viewer.is_running() and Running:
             try:
-                if(joystick.is_button_pressed(JoystickButton.SELECT)):
+                keyboard.update()
+                
+                # 9: 退出
+                if keyboard.is_key_pressed(KeyboardKey.KEY_9):
                     Running = False
 
-                joystick.update()
-                if joystick.is_button_released(JoystickButton.L3):
+                # 2: PASSIVE (阻尼保护)
+                if keyboard.is_key_released(KeyboardKey.KEY_2):
                     state_cmd.skill_cmd = FSMCommand.PASSIVE
-                if joystick.is_button_released(JoystickButton.START):
-                    state_cmd.skill_cmd = FSMCommand.POS_RESET
-                if joystick.is_button_released(JoystickButton.A) and joystick.is_button_pressed(JoystickButton.R1):
-                    state_cmd.skill_cmd = FSMCommand.LOCO
-                if joystick.is_button_released(JoystickButton.X) and joystick.is_button_pressed(JoystickButton.R1):
-                    state_cmd.skill_cmd = FSMCommand.SKILL_1
-                if joystick.is_button_released(JoystickButton.Y) and joystick.is_button_pressed(JoystickButton.R1):
-                    state_cmd.skill_cmd = FSMCommand.SKILL_2
-                if joystick.is_button_released(JoystickButton.B) and joystick.is_button_pressed(JoystickButton.R1):
-                    state_cmd.skill_cmd = FSMCommand.SKILL_3
-                if joystick.is_button_released(JoystickButton.Y) and joystick.is_button_pressed(JoystickButton.L1):
-                    state_cmd.skill_cmd = FSMCommand.SKILL_4
+                    print("[键盘] 切换到: PASSIVE (阻尼保护)")
                 
-                state_cmd.vel_cmd[0] = -joystick.get_axis_value(1)
-                state_cmd.vel_cmd[1] = -joystick.get_axis_value(0)
-                state_cmd.vel_cmd[2] = -joystick.get_axis_value(3)
+                # 3: POS_RESET (位控复位)
+                if keyboard.is_key_released(KeyboardKey.KEY_3):
+                    state_cmd.skill_cmd = FSMCommand.POS_RESET
+                    print("[键盘] 切换到: POS_RESET (位控复位)")
+                
+                # 4: LOCO (行走模式)
+                if keyboard.is_key_released(KeyboardKey.KEY_4):
+                    state_cmd.skill_cmd = FSMCommand.LOCO
+                    print("[键盘] 切换到: LOCO (行走模式)")
+                
+                # 5: SKILL_1 (舞蹈)
+                if keyboard.is_key_released(KeyboardKey.KEY_5):
+                    state_cmd.skill_cmd = FSMCommand.SKILL_1
+                    print("[键盘] 切换到: SKILL_1 (舞蹈)")
+                
+                # 6: SKILL_2 (武术)
+                if keyboard.is_key_released(KeyboardKey.KEY_6):
+                    state_cmd.skill_cmd = FSMCommand.SKILL_2
+                    print("[键盘] 切换到: SKILL_2 (武术)")
+                
+                # 7: SKILL_3 (武术2)
+                if keyboard.is_key_released(KeyboardKey.KEY_7):
+                    state_cmd.skill_cmd = FSMCommand.SKILL_3
+                    print("[键盘] 切换到: SKILL_3 (武术2)")
+                
+                # 8: SKILL_4 (踢腿)
+                if keyboard.is_key_released(KeyboardKey.KEY_8):
+                    state_cmd.skill_cmd = FSMCommand.SKILL_4
+                    print("[键盘] 切换到: SKILL_4 (踢腿)")
+                
+                # T: SKILL_5 (MotionTracking)
+                if keyboard.is_key_released(KeyboardKey.KEY_T):
+                    state_cmd.skill_cmd = FSMCommand.SKILL_5
+                    print("[键盘] 切换到: SKILL_5 (MotionTracking)")
+                
+                # 获取速度命令
+                vel_x, vel_y, vel_yaw = keyboard.get_velocity()
+                state_cmd.vel_cmd[0] = vel_x
+                state_cmd.vel_cmd[1] = vel_y
+                state_cmd.vel_cmd[2] = vel_yaw
                 
                 step_start = time.time()
                 
@@ -105,4 +137,5 @@ if __name__ == "__main__":
             time_until_next_step = m.opt.timestep - (time.time() - step_start)
             if time_until_next_step > 0:
                 time.sleep(time_until_next_step)
-        
+    
+    keyboard.stop()
