@@ -7,7 +7,7 @@ onnx_path: "policyallref.onnx"
 motion_file: "command/sfu_29dof.pkl"
 
 # 选择第几个动作（从0开始，默认第一个动作）
-motion_index: 0
+motion_index: 2
 
 # motion_length 会自动从动作文件读取，这里仅作为备用
 motion_length: 17.433

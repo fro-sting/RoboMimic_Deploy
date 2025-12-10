@@ -26,6 +26,7 @@ class KeyboardKey(Enum):
     KEY_8 = auto()    # SKILL_4 (踢腿)
     KEY_9 = auto()    # 退出程序
     KEY_T = auto()    # SKILL_5 (MotionTracking)
+    KEY_O = auto()    # 导航模式开关
 
 class KeyBoard:
     def __init__(self):
@@ -70,6 +71,7 @@ class KeyBoard:
         print("    7:    武术2 (SKILL_3)")
         print("    8:    踢腿 (SKILL_4)")
         print("    T:    MotionTracking (SKILL_5)")
+        print("    O:    导航模式 开/关,处于LOCO模式时有效")
         print("-"*50)
         print("    9:    退出程序")
         print("="*50)
@@ -103,6 +105,7 @@ class KeyBoard:
                     '8': KeyboardKey.KEY_8,
                     '9': KeyboardKey.KEY_9,
                     't': KeyboardKey.KEY_T,
+                    'o': KeyboardKey.KEY_O,
                 }
                 return char_map.get(key.char.lower())
         except AttributeError:

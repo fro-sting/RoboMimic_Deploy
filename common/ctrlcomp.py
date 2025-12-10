@@ -15,6 +15,7 @@ class StateAndCmd:
         self.gravity_ori = np.array([0., 0., 1.])
         self.ang_vel = np.zeros(3)
         self.base_quat = np.array([1., 0., 0., 0.])  # wxyz格式的四元数
+        self.base_pos = np.zeros(3) # base position
         # joy cmd
         self.vel_cmd = np.zeros(3)
         self.skill_cmd = FSMCommand.INVALID

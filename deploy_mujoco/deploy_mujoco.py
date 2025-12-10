@@ -14,7 +14,7 @@ from common.ctrlcomp import *
 from FSM.FSM import *
 from common.utils import get_gravity_orientation
 from common.keyboard import KeyBoard, KeyboardKey
-
+from policy.navigation.Navigation import Navigation
 
 
 def pd_control(target_q, q, kp, target_dq, dq, kd):
@@ -38,6 +38,8 @@ if __name__ == "__main__":
     policy_output_action = np.zeros(num_joints, dtype=np.float32)
     kps = np.zeros(num_joints, dtype=np.float32)
     kds = np.zeros(num_joints, dtype=np.float32)
+    render_counter = 0  # 添加渲染计数器
+    render_decimation = 10  # 每10步渲染一次
     sim_counter = 0
     
     state_cmd = StateAndCmd(num_joints)
@@ -46,6 +48,17 @@ if __name__ == "__main__":
     
     # 设置MuJoCo数据引用，用于MotionTracking等需要body位置的策略
     FSM_controller.set_mujoco_data(d, m)
+    
+    # 初始化导航
+    navigator = Navigation(PROJECT_ROOT)
+    navigating = False
+    
+    # 初始化 state_cmd
+    state_cmd.q = d.qpos[7:].copy()
+    state_cmd.dq = d.qvel[6:].copy()
+    state_cmd.base_quat = d.qpos[3:7].copy()
+    state_cmd.base_pos = d.qpos[:3].copy()
+    state_cmd.gravity_ori = get_gravity_orientation(state_cmd.base_quat)
     
     keyboard = KeyBoard()
     Running = True
@@ -99,11 +112,24 @@ if __name__ == "__main__":
                     state_cmd.skill_cmd = FSMCommand.SKILL_5
                     print("[键盘] 切换到: SKILL_5 (MotionTracking)")
                 
-                # 获取速度命令
-                vel_x, vel_y, vel_yaw = keyboard.get_velocity()
-                state_cmd.vel_cmd[0] = vel_x
-                state_cmd.vel_cmd[1] = vel_y
-                state_cmd.vel_cmd[2] = vel_yaw
+                # I: 导航模式开关
+                if keyboard.is_key_released(KeyboardKey.KEY_O):
+                    navigating = not navigating
+                    print(f"[键盘] 导航模式: {'开启' if navigating else '关闭'}")
+                
+                if navigating:
+                    # 使用当前状态计算导航指令
+                    # 注意：state_cmd 在循环末尾更新，所以这里使用的是上一帧的状态
+                    nav_cmd = navigator.get_action(state_cmd.base_pos, state_cmd.base_quat)
+                    state_cmd.vel_cmd[:] = nav_cmd
+                    
+                    
+                else:
+                    # 获取速度命令
+                    vel_x, vel_y, vel_yaw = keyboard.get_velocity()
+                    state_cmd.vel_cmd[0] = vel_x
+                    state_cmd.vel_cmd[1] = vel_y
+                    state_cmd.vel_cmd[2] = vel_yaw
                 
                 step_start = time.time()
                 
@@ -116,6 +142,7 @@ if __name__ == "__main__":
                     qj = d.qpos[7:]
                     dqj = d.qvel[6:]
                     quat = d.qpos[3:7]
+                    pos = d.qpos[:3]
                     
                     omega = d.qvel[3:6] 
                     gravity_orientation = get_gravity_orientation(quat)
@@ -124,6 +151,7 @@ if __name__ == "__main__":
                     state_cmd.dq = dqj.copy()
                     state_cmd.gravity_ori = gravity_orientation.copy()
                     state_cmd.base_quat = quat.copy()
+                    state_cmd.base_pos = pos.copy()
                     state_cmd.ang_vel = omega.copy()
                     
                     FSM_controller.run()
@@ -133,7 +161,11 @@ if __name__ == "__main__":
             except ValueError as e:
                 print(str(e))
             
-            viewer.sync()
+            
+            render_counter += 1
+            if render_counter % render_decimation == 0:
+                viewer.sync()
+            
             time_until_next_step = m.opt.timestep - (time.time() - step_start)
             if time_until_next_step > 0:
                 time.sleep(time_until_next_step)

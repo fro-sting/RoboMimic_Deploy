@@ -300,7 +300,8 @@ class MotionTracking(FSMState):
         self.obs_ref_motion = np.zeros(self.num_obs_ref_motion, dtype=np.float32)
         self.obs_priv = np.zeros(self.num_obs_priv, dtype=np.float32)
         self.prev_body_pos = np.zeros((self.num_keypoints, 3), dtype=np.float32)
-    
+
+        #self._init_robot_state()
     def set_mujoco_data(self, mj_data, mj_model):
         """设置MuJoCo数据引用，用于获取body位置"""
         self.mujoco_data = mj_data
@@ -317,7 +318,58 @@ class MotionTracking(FSMState):
         self.keypoint_body_ids = np.array(self.keypoint_body_ids, dtype=np.int32)
         print(f"Keypoint body IDs (MuJoCo): {self.keypoint_body_ids}")
     
+    
+    def _init_robot_state(self):
+        """初始化机器人状态到动作的第一帧"""
+        if self.mujoco_data is None or self.motion_lib.num_frames == 0:
+            return
+        # 获取第0帧
+        frame = self.motion_lib.get_frame(0)
+        if frame is None:
+            return
+
+        print("Initializing robot state to motion frame 0")
         
+        # 模仿 motionlib 记录 init_root_state (3 pos + 4 quat + 3 lin_vel + 3 ang_vel)
+        self.init_root_state = np.zeros(13, dtype=np.float32)
+
+        # 1. 设置 Root State (Pelvis)
+        # frame["body_pos_w"] 是所有body的位置，第0个通常是root
+        if "body_pos_w" in frame and "body_quat_w" in frame:
+            root_pos = frame["body_pos_w"][0]
+            root_quat = frame["body_quat_w"][0] # wxyz
+            
+            self.mujoco_data.qpos[:3] = root_pos
+            self.mujoco_data.qpos[3:7] = root_quat
+            
+            self.init_root_state[:3] = root_pos
+            self.init_root_state[3:7] = root_quat
+
+        # 2. 设置 Joint Positions
+        if "joint_pos" in frame:
+            ref_joint_pos = frame["joint_pos"]
+            # 确保维度匹配 (qpos - 7 = 29)
+            if len(ref_joint_pos) == len(self.mujoco_data.qpos) - 7:
+                self.mujoco_data.qpos[7:] = ref_joint_pos
+
+        # 3. 设置 Velocities
+        self.mujoco_data.qvel[:] = 0.0
+        
+        if "joint_vel" in frame:
+            ref_joint_vel = frame["joint_vel"]
+            if len(ref_joint_vel) == len(self.mujoco_data.qvel) - 6:
+                self.mujoco_data.qvel[6:] = ref_joint_vel
+        
+        # 尝试获取root速度
+        if "body_lin_vel_w" in frame:
+            self.mujoco_data.qvel[:3] = frame["body_lin_vel_w"][0]
+            self.init_root_state[7:10] = frame["body_lin_vel_w"][0]
+            
+        if "body_ang_vel_w" in frame:
+            self.mujoco_data.qvel[3:6] = frame["body_ang_vel_w"][0]
+            self.init_root_state[10:13] = frame["body_ang_vel_w"][0]
+        print(f"init_root_state: {self.init_root_state}")
+
     def _get_body_positions(self):
         """从MuJoCo获取13个keypoint body的位置（在body frame下，相对于pelvis）"""
         if self.mujoco_data is None:
@@ -424,32 +476,26 @@ class MotionTracking(FSMState):
             pos_diff: 位置差（在frame0坐标系下） (N, 3)
             quat_diff: 四元数差（相对旋转） (N, 4) wxyz
         """
-        # 位置差：将pos1转换到pos0的局部坐标系
-        pos_diff = pos1 - pos0
+        # 转换四元数格式 wxyz -> xyzw (scipy使用xyzw)
+        quat0_xyzw = np.concatenate([quat0[:, 1:], quat0[:, :1]], axis=-1)
+        quat1_xyzw = np.concatenate([quat1[:, 1:], quat1[:, :1]], axis=-1)
         
-        # 对每个关键点进行旋转变换
-        pos_diff_local = np.zeros_like(pos_diff)
-        quat_diff = np.zeros_like(quat0)
+        r0 = R.from_quat(quat0_xyzw)
+        r1 = R.from_quat(quat1_xyzw)
+        r0_inv = r0.inv()
+
+        # 计算相对旋转: q12 = q01^-1 * q02
+        r_diff = r0_inv * r1
+        quat_diff_xyzw = r_diff.as_quat()
         
-        for i in range(len(pos0)):
-            # 将wxyz转换为xyzw格式（scipy使用xyzw）
-            quat0_xyzw = np.array([quat0[i][1], quat0[i][2], quat0[i][3], quat0[i][0]])
-            quat1_xyzw = np.array([quat1[i][1], quat1[i][2], quat1[i][3], quat1[i][0]])
-            
-            rot0 = R.from_quat(quat0_xyzw)
-            rot1 = R.from_quat(quat1_xyzw)
-            
-            # 位置差旋转到frame0的坐标系
-            pos_diff_local[i] = rot0.inv().apply(pos_diff[i])
-            
-            # 四元数差：quat_diff = quat0^-1 * quat1
-            rot_diff = rot0.inv() * rot1
-            quat_diff_xyzw = rot_diff.as_quat()
-            # 转回wxyz格式
-            quat_diff[i] = np.array([quat_diff_xyzw[3], quat_diff_xyzw[0], 
-                                     quat_diff_xyzw[1], quat_diff_xyzw[2]], dtype=np.float32)
+        # 转回 wxyz
+        quat_diff = np.concatenate([quat_diff_xyzw[:, 3:], quat_diff_xyzw[:, :3]], axis=-1)
         
-        return pos_diff_local, quat_diff
+        # 计算相对位置: t12 = q01^-1 * (t02 - t01)
+        pos_diff = r0_inv.apply(pos1 - pos0)
+        
+        return pos_diff.astype(np.float32), quat_diff.astype(np.float32)
+    
     
     def _compute_priv_obs(self, dt=0.02):
         """
@@ -583,9 +629,9 @@ class MotionTracking(FSMState):
         # self.action = np.zeros(self.num_actions, dtype=np.float32)
         
         output = self.ort_session.run(None, {
-            "priv": obs_priv_tensor_zero,
-            "ref_motion_": obs_ref_tensor_zero,
-            "robot": obs_robot_tensor_zero          
+            "priv": obs_priv_tensor,
+            "ref_motion_": obs_ref_tensor,
+            "robot": obs_robot_tensor         
         })[0]
 
         if self.counter_step % 100 == 0:
