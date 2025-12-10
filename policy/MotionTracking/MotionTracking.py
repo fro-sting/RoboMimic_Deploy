@@ -10,6 +10,7 @@ import onnxruntime
 import os
 import joblib
 from scipy.spatial.transform import Rotation as R
+import mujoco
 
 """
 G1 29自由度关节顺序 (0-28):
@@ -308,6 +309,16 @@ class MotionTracking(FSMState):
         self.mujoco_model = mj_model
         # 获取keypoint body的ID（MuJoCo中的ID）
         self.keypoint_body_ids = []
+        print("\n[DEBUG] MuJoCo Joint Order:")
+        # qpos[0-6] 是 root (free joint)，从 7 开始是关节
+        # mj_model.jnt_qposadr 存储了每个关节在 qpos 中的起始索引
+        for i in range(mj_model.njnt):
+            name = mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_JOINT, i)
+            qpos_addr = mj_model.jnt_qposadr[i]
+            # 过滤掉 root (free joint 通常 qpos_addr=0)
+            if qpos_addr >= 7:
+                print(f"  Joint ID {i}: '{name}' -> qpos index: {qpos_addr} (relative: {qpos_addr-7})")
+        print("=======================================\n")
         for name in self.KEYPOINT_BODY_NAMES:
             try:
                 body_id = mj_model.body(name).id
@@ -348,12 +359,20 @@ class MotionTracking(FSMState):
         # 2. 设置 Joint Positions
         if "joint_pos" in frame:
             ref_joint_pos = frame["joint_pos"]
+            zero = np.zeros_like(ref_joint_pos)
+           # print("joint_pos111",ref_joint_pos)
             # 确保维度匹配 (qpos - 7 = 29)
+
             if len(ref_joint_pos) == len(self.mujoco_data.qpos) - 7:
                 self.mujoco_data.qpos[7:] = ref_joint_pos
-
         # 3. 设置 Velocities
-        self.mujoco_data.qvel[:] = 0.0
+        if "joint_vel" in frame:
+            ref_joint_vel = frame["joint_vel"]
+            if len(ref_joint_vel) == len(self.mujoco_data.qvel)-6:
+                print("111")
+                self.mujoco_data.qvel[6:] = ref_joint_vel
+
+         
         
         if "joint_vel" in frame:
             ref_joint_vel = frame["joint_vel"]
@@ -409,7 +428,7 @@ class MotionTracking(FSMState):
             return obs
         
         idx = 0
-        
+       # print(f"pose",self.mujoco_data.qpos[7:])
         # 1. ref_qpos (29) - 参考关节位置（原始值）
         ref_joint_pos = frame["joint_pos"]
         obs[idx:idx+29] = ref_joint_pos
@@ -538,69 +557,83 @@ class MotionTracking(FSMState):
         
         return obs
         
-    def run(self):
-        """主运行循环"""
+    def _compute_robot_obs(self):
+        """
+        计算机器人观测(123维)
+
+        结构：
+        - root_quat_w: 4 (完整四元数 wxyz)
+        - root_angvel_b: 3
+        - projected_gravity_b: 3
+        - joint_pos: 29 (全部关节)
+        - joint_vel: 29
+        - prev_actions: 19 (steps=1)
+        - body_pos: 12 bodies × 3 = 36 (不含pelvis)
+        总计: 4+3+3+29+29+19+36 = 123
+        """
+        obs =  np.zeros(self.num_obs_robot, dtype=np.float32)
         gravity_orientation = self.state_cmd.gravity_ori.reshape(-1)  # 3
+        gravity_orientation = gravity_orientation / (np.linalg.norm(gravity_orientation) + 1e-8) # 归一化
         qj = self.state_cmd.q.reshape(-1)  # 29
         dqj = self.state_cmd.dq.reshape(-1)  # 29
         ang_vel = self.state_cmd.ang_vel.reshape(-1)  # 3
-        
-        # 获取base四元数
         base_quat = self.state_cmd.base_quat.reshape(-1)  # 4 (wxyz)
-
-        
-        # ==================== 构建robot观测 (123维) ====================
-        # 根据训练配置:
-        # root_quat_w: 4 (完整四元数 wxyz)
-        # root_angvel_b: 3
-        # projected_gravity_b: 3
-        # joint_pos: 29 (全部关节)
-        # joint_vel: 29
-        # prev_actions: 19 (steps=1)
-        # body_pos: 12 bodies × 3 = 36 (不含pelvis)
-        # 总计: 4+3+3+29+29+19+36 = 123
         
         idx = 0
         # root_quat_w (4) -  (wxyz格式)
-        self.obs_robot[idx:idx+4] = base_quat
+        obs[idx:idx+4] = base_quat
         idx += 4
         
         # root_angvel_b (3)
-        self.obs_robot[idx:idx+3] = ang_vel
+        obs[idx:idx+3] = ang_vel
         idx += 3
+        ###
         
-        # projected_gravity_b (3)
-        self.obs_robot[idx:idx+3] = gravity_orientation
+        # projected_gravity_b (3)已完成归一化
+        obs[idx:idx+3] = gravity_orientation
         idx += 3
         
         # joint_pos (29) - 全部关节
-        self.obs_robot[idx:idx+29] = qj
+        obs[idx:idx+29] = qj
         idx += 29
         
         # joint_vel (29) - 全部关节
-        self.obs_robot[idx:idx+29] = dqj
+        obs[idx:idx+29] = dqj
         idx += 29
         
         # prev_actions (19)
-        self.obs_robot[idx:idx+19] = self.prev_action
+        obs[idx:idx+19] = self.prev_action
         idx += 19
         
         # body_pos (36) - 12个keypoint body的位置（不含pelvis，相对于pelvis）
         body_pos = self._get_body_positions()  # (13, 3)
         body_pos_12 = body_pos[1:]  # (12, 3)
-        self.obs_robot[idx:idx+36] = body_pos_12.flatten()
+        obs[idx:idx+36] = body_pos_12.flatten()
         idx += 36
         
         # 剩余维度填零 (如果有的话)
         if idx < self.num_obs_robot:
-            self.obs_robot[idx:] = 0.0
+            obs[idx:] = 0.0
+            
+        return obs
+
+
+    def run(self):
+        """主运行循环"""
+
+        # ==================== 构建robot观测 (123维) ====================
+        self.obs_robot = self._compute_robot_obs()
         
+        
+                
         # ==================== 构建ref_motion观测 (120维) ====================
         self.obs_ref_motion = self._compute_ref_motion_obs(self.counter_step)
+
         
         # ==================== 构建priv观测 (40维) ====================
         self.obs_priv = self._compute_priv_obs()
-
+        #print(f"obspriv", self.obs_priv)
+        breakpoint()
         # ==================== 详细调试信息 ====================
         if self.counter_step % 50 == 0:
             print(f"\n{'='*60}")
@@ -608,10 +641,7 @@ class MotionTracking(FSMState):
             print(f"  Robot obs shape: {self.obs_robot.shape}, range: [{self.obs_robot.min():.3f}, {self.obs_robot.max():.3f}]")
             print(f"  Ref motion obs shape: {self.obs_ref_motion.shape}, range: [{self.obs_ref_motion.min():.3f}, {self.obs_ref_motion.max():.3f}]")
             print(f"  Priv obs shape: {self.obs_priv.shape}, range: [{self.obs_priv.min():.3f}, {self.obs_priv.max():.3f}]")
-            print(f"  Base quat: {base_quat}")
-            print(f"  Ang vel: {ang_vel}")
-            print(f"  Joint pos (first 5): {qj[:5]}")
-            print(f"  Joint pos scaled (first 5): {qj[:5]}")
+            
             print(f"  Prev action: {self.prev_action}")
         
         
