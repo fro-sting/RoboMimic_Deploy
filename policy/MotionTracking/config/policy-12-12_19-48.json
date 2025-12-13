@@ -1,0 +1,41 @@
+{
+    "action_scaling": {
+        ".*hip.*": 0.5,
+        ".*knee.*": 0.5,
+        ".*ankle_pitch.*": 0.5,
+        "waist_yaw_joint": 0.5,
+        ".*shoulder.*": 0.5,
+        ".*elbow.*": 0.5
+    },
+    "in_keys": [
+        "robot",
+        "priv",
+        "ref_motion_"
+    ],
+    "out_keys": [
+        "robot",
+        "priv",
+        "a_in",
+        "_actor_feature",
+        "loc",
+        "scale",
+        "action",
+        "action_log_prob"
+    ],
+    "in_shapes": [
+        [
+            [
+                1,
+                123
+            ],
+            [
+                1,
+                40
+            ],
+            [
+                1,
+                120
+            ]
+        ]
+    ]
+}

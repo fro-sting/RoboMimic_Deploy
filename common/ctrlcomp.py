@@ -11,6 +11,10 @@ class StateAndCmd:
         self.q = np.zeros(num_joints, dtype=np.float32)
         self.dq = np.zeros(num_joints, dtype=np.float32)
         self.ddq = np.zeros(num_joints, dtype=np.float32)
+        self.xpos = np.zeros((num_joints+2  , 3), dtype=np.float32)  # including base
+        self.xquat = np.zeros((num_joints+2 , 4), dtype=np.float32)  # including base, wxyz format
+        self.root_vel = np.zeros(3, dtype=np.float32)
+        self.cvel = np.zeros((num_joints+2 , 6), dtype=np.float32)  # including base, 6D velocity
         self.tau_est = np.zeros(num_joints, dtype=np.float32)
         self.gravity_ori = np.array([0., 0., 1.])
         self.ang_vel = np.zeros(3)

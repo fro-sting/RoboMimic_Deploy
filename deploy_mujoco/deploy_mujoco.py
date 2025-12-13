@@ -47,7 +47,7 @@ if __name__ == "__main__":
     FSM_controller = FSM(state_cmd, policy_output)
     
     # 设置MuJoCo数据引用，用于MotionTracking等需要body位置的策略
-    FSM_controller.set_mujoco_data(d, m)
+    #FSM_controller.set_mujoco_data(d, m)
     
     # 初始化导航
     navigator = Navigation(PROJECT_ROOT)
@@ -143,8 +143,11 @@ if __name__ == "__main__":
                     dqj = d.qvel[6:]
                     quat = d.qpos[3:7]
                     pos = d.qpos[:3]
-                    
-                    omega = d.qvel[3:6] 
+                    xpos = d.xpos # 31*3 第一个是world无意义
+                    xquat = d.xquat # 31*4 第一个是world无意义
+                    cvel = d.cvel # 31*6 第一个是world无意义
+                    root_vel = d.qvel[0:3] #世界坐标系
+                    omega = d.qvel[3:6] # 自身坐标系
                     gravity_orientation = get_gravity_orientation(quat)
                     
                     state_cmd.q = qj.copy()
@@ -153,7 +156,10 @@ if __name__ == "__main__":
                     state_cmd.base_quat = quat.copy()
                     state_cmd.base_pos = pos.copy()
                     state_cmd.ang_vel = omega.copy()
-                    
+                    state_cmd.root_vel = root_vel.copy()
+                    state_cmd.xpos = xpos.copy()
+                    state_cmd.xquat = xquat.copy()
+                    state_cmd.cvel = cvel.copy()
                     FSM_controller.run()
                     policy_output_action = policy_output.actions.copy()
                     kps = policy_output.kps.copy()

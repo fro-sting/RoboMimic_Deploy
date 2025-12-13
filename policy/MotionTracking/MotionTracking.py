@@ -44,6 +44,36 @@ G1 29自由度关节顺序 (0-28):
 27: right_wrist_pitch_joint
 28: right_wrist_yaw_joint
 
+模型 29自由度关节顺序
+"left_hip_pitch_link",
+"right_hip_pitch_link",
+"waist_yaw_link",
+"left_hip_roll_link",
+"right_hip_roll_link",
+"waist_roll_link",
+"left_hip_yaw_link",
+"right_hip_yaw_link",
+"torso_link",
+"left_knee_link",
+"right_knee_link",
+"left_shoulder_pitch_link",
+"right_shoulder_pitch_link",
+"left_ankle_pitch_link",
+"right_ankle_pitch_link",
+"left_shoulder_roll_link",
+"right_shoulder_roll_link",
+"left_ankle_roll_link",
+"right_ankle_roll_link",
+"left_shoulder_yaw_link",
+"right_shoulder_yaw_link",
+"left_elbow_link",
+"right_elbow_link",
+"left_wrist_roll_link",
+"right_wrist_roll_link",
+"left_wrist_pitch_link",
+"right_wrist_pitch_link",
+"left_wrist_yaw_link",
+"right_wrist_yaw_link"
 模型19维输出对应:
 .*hip.*: 6个 (0,1,2,6,7,8)
 .*knee.*: 2个 (3,9)
@@ -52,14 +82,6 @@ waist_yaw_joint: 1个 (12)
 .*shoulder.*: 6个 (15,16,17,22,23,24)
 .*elbow.*: 2个 (18,25)
 总计: 19个
- 
-keypoint_body (12个，用于body_pos观测):
-- left_hip_pitch_link (1), right_hip_pitch_link (7)
-- left_knee_link (4), right_knee_link (10)
-- left_ankle_roll_link (6), right_ankle_roll_link (12)
-- left_shoulder_roll_link (16), right_shoulder_roll_link (23)
-- left_elbow_link (18), right_elbow_link (25)
-- left_wrist_yaw_link (21), right_wrist_yaw_link (28)
 """
 
 
@@ -211,6 +233,7 @@ class MotionTracking(FSMState):
         current_dir = os.path.dirname(os.path.abspath(__file__))
         config_path = os.path.join(current_dir, "config", "MotionTracking.yaml")
         with open(config_path, "r") as f:
+            # load config
             config = yaml.load(f, Loader=yaml.FullLoader)
             self.onnx_path = os.path.join(current_dir, "model", config["onnx_path"])
             self.kps = np.array(config["kps"], dtype=np.float32)
@@ -238,42 +261,65 @@ class MotionTracking(FSMState):
                     self.motion_length = self.motion_lib.motion_length
             else:
                 self.motion_lib = MotionLibrary()
-            
-            # 19个输出关节对应29自由度的索引
-            # hip(6) + knee(2) + ankle_pitch(2) + waist_yaw(1) + shoulder(6) + elbow(2) = 19
-            self.action_to_dof29_index = np.array([
-                0, 1, 2,    # left_hip_pitch, left_hip_roll, left_hip_yaw
-                6, 7, 8,    # right_hip_pitch, right_hip_roll, right_hip_yaw
-                3, 9,       # left_knee, right_knee
-                4, 10,      # left_ankle_pitch, right_ankle_pitch
-                12,         # waist_yaw
-                15, 16, 17, # left_shoulder_pitch, left_shoulder_roll, left_shoulder_yaw
-                22, 23, 24, # right_shoulder_pitch, right_shoulder_roll, right_shoulder_yaw
-                18, 25      # left_elbow, right_elbow
-            ], dtype=np.int32)
-            
-            # 从29自由度中提取19个控制关节的索引 (用于观测)
-            self.dof19_index = self.action_to_dof29_index.copy()
-            
-            # 13个keypoint body在参考动作数据中的索引
-            # 动作数据body索引（不含world，pelvis=0）
+
+            # "Source Order": 模型/动作文件的关节顺序 (共29个)
+            source_joint_names = [
+                "left_hip_pitch", "right_hip_pitch", "waist_yaw", "left_hip_roll", "right_hip_roll",
+                "waist_roll", "left_hip_yaw", "right_hip_yaw", "waist_pitch", "left_knee",
+                "right_knee", "left_shoulder_pitch", "right_shoulder_pitch", "left_ankle_pitch",
+                "right_ankle_pitch", "left_shoulder_roll", "right_shoulder_roll", "left_ankle_roll",
+                "right_ankle_roll", "left_shoulder_yaw", "right_shoulder_yaw", "left_elbow",
+                "right_elbow", "left_wrist_roll", "right_wrist_roll", "left_wrist_pitch",
+                "right_wrist_pitch", "left_wrist_yaw", "right_wrist_yaw"
+            ]
+            # "MuJoCo Order": XML文件定义的关节顺序 (共29个)
+            mujoco_joint_names = [
+                "left_hip_pitch_joint", "left_hip_roll_joint", "left_hip_yaw_joint", "left_knee_joint", "left_ankle_pitch_joint", "left_ankle_roll_joint",
+                "right_hip_pitch_joint", "right_hip_roll_joint", "right_hip_yaw_joint", "right_knee_joint", "right_ankle_pitch_joint", "right_ankle_roll_joint",
+                "waist_yaw_joint", "waist_roll_joint", "waist_pitch_joint",
+                "left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint", "left_elbow_joint", "left_wrist_roll_joint", "left_wrist_pitch_joint", "left_wrist_yaw_joint",
+                "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint", "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint"
+            ]
+
+            # 1. 映射: Source Order -> MuJoCo Order
+            #    用途: 将模型输出的动作(Source)应用到MuJoCo(MuJoCo)
+            #    构建方法: 遍历MuJoCo关节名，在Source列表中找到它的索引
+            source_name_to_idx = {name.replace("_joint", "").replace("_link", ""): i for i, name in enumerate(source_joint_names)}
+            self.source_to_mujoco_map = np.array([source_name_to_idx[name.replace("_joint", "")] for name in mujoco_joint_names], dtype=np.int32)
+
+            # 2. 映射: MuJoCo Order -> Source Order
+            #    用途: 将MuJoCo的观测(MuJoCo)转换为模型需要的输入(Source)
+            #    构建方法: 遍历Source关节名，在MuJoCo列表中找到它的索引
+            mujoco_name_to_idx = {name: i for i, name in enumerate(mujoco_joint_names)}
+            self.mujoco_to_source_map = np.array([mujoco_name_to_idx[name + "_joint"] for name in source_joint_names], dtype=np.int32)
+
+            # 3. 19个输出关节在 "Source Order" 列表中的索引
+            #    这个列表定义了模型输出的19个动作分别对应 `source_joint_names` 里的哪几项
+            action_source_indices = [
+                source_name_to_idx["left_hip_pitch"], source_name_to_idx["right_hip_pitch"], source_name_to_idx["waist_yaw"],
+                source_name_to_idx["left_hip_roll"], source_name_to_idx["right_hip_roll"], source_name_to_idx["left_hip_yaw"],
+                source_name_to_idx["right_hip_yaw"], source_name_to_idx["left_knee"], source_name_to_idx["right_knee"],
+                source_name_to_idx["left_shoulder_pitch"], source_name_to_idx["right_shoulder_pitch"], source_name_to_idx["left_ankle_pitch"],
+                source_name_to_idx["right_ankle_pitch"], source_name_to_idx["left_shoulder_roll"], source_name_to_idx["right_shoulder_roll"],
+                source_name_to_idx["left_shoulder_yaw"], source_name_to_idx["right_shoulder_yaw"], source_name_to_idx["left_elbow"],
+                source_name_to_idx["right_elbow"]
+            ]
+
+            # 4. 将19维动作映射到29维 "MuJoCo Order" 的最终索引
+            self.action_to_dof29_index = self.mujoco_to_source_map[action_source_indices]
+
+            # 5. 13个keypoint body在 "Source Order" 动作数据中的索引
+            #    这个保持不变，因为它定义了从动作文件中取哪些body
             self.keypoint_body_indices = np.array([
-                0,   # pelvis
-                1,   # left_hip_pitch_link
-                7,   # right_hip_pitch_link
-                4,   # left_knee_link
-                10,  # right_knee_link
-                6,   # left_ankle_roll_link
-                12,  # right_ankle_roll_link
-                17,  # left_shoulder_roll_link
-                24,  # right_shoulder_roll_link
-                19,  # left_elbow_link
-                26,  # right_elbow_link
-                22,  # left_wrist_yaw_link
-                29,  # right_wrist_yaw_link
+                0, 1, 2, 10, 11, 18, 19, 16, 17, 22, 23, 28, 29
             ], dtype=np.int32)
             
-            self.num_keypoints = len(self.keypoint_body_indices)  # 13
+            # 13个keypoint body在 MuJoCo 模型中的 body id
+            self.keypoint_body_ids = np.array([
+                0, 1, 7, 4, 10, 6, 12, 17, 24, 19, 26, 22, 29
+            ], dtype=np.int32)
+            self.num_keypoints = len(self.keypoint_body_indices)
+            
             
             # 初始化观测和动作缓存
             self.obs_robot = np.zeros(self.num_obs_robot, dtype=np.float32)
@@ -303,33 +349,7 @@ class MotionTracking(FSMState):
         self.prev_body_pos = np.zeros((self.num_keypoints, 3), dtype=np.float32)
 
         #self._init_robot_state()
-    def set_mujoco_data(self, mj_data, mj_model):
-        """设置MuJoCo数据引用，用于获取body位置"""
-        self.mujoco_data = mj_data
-        self.mujoco_model = mj_model
-        # 获取keypoint body的ID（MuJoCo中的ID）
-        self.keypoint_body_ids = []
-        print("\n[DEBUG] MuJoCo Joint Order:")
-        # qpos[0-6] 是 root (free joint)，从 7 开始是关节
-        # mj_model.jnt_qposadr 存储了每个关节在 qpos 中的起始索引
-        for i in range(mj_model.njnt):
-            name = mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_JOINT, i)
-            qpos_addr = mj_model.jnt_qposadr[i]
-            # 过滤掉 root (free joint 通常 qpos_addr=0)
-            if qpos_addr >= 7:
-                print(f"  Joint ID {i}: '{name}' -> qpos index: {qpos_addr} (relative: {qpos_addr-7})")
-        print("=======================================\n")
-        for name in self.KEYPOINT_BODY_NAMES:
-            try:
-                body_id = mj_model.body(name).id
-                self.keypoint_body_ids.append(body_id)
-            except KeyError:
-                print(f"Warning: Body '{name}' not found in MuJoCo model")
-                self.keypoint_body_ids.append(-1)
-        self.keypoint_body_ids = np.array(self.keypoint_body_ids, dtype=np.int32)
-        print(f"Keypoint body IDs (MuJoCo): {self.keypoint_body_ids}")
-    
-    
+       
     def _init_robot_state(self):
         """初始化机器人状态到动作的第一帧"""
         if self.mujoco_data is None or self.motion_lib.num_frames == 0:
@@ -355,23 +375,28 @@ class MotionTracking(FSMState):
             
             self.init_root_state[:3] = root_pos
             self.init_root_state[3:7] = root_quat
-
-        # 2. 设置 Joint Positions
+        
         if "joint_pos" in frame:
             ref_joint_pos = frame["joint_pos"]
-            zero = np.zeros_like(ref_joint_pos)
-           # print("joint_pos111",ref_joint_pos)
-            # 确保维度匹配 (qpos - 7 = 29)
+        # 2. 设置 Joint Positions
+            if len(ref_joint_pos) == 29:
+                    # ref_joint_pos 是 Source Order, d.qpos[7:] 是 MuJoCo Order
+                    # 我们需要将 ref_joint_pos 重新排序以匹配 MuJoCo
+                    # 正确用法: d.qpos[7:][mujoco_idx] = ref_joint_pos[source_idx]
+                    # 等价于: d.qpos[7:] = ref_joint_pos[source_to_mujoco_map]
+                    self.mujoco_data.qpos[7:] = ref_joint_pos[self.source_to_mujoco_map]
+                    print("Applied joint positions with reordering.")
+            else:
+                    print(f"Error: Motion data dim {len(ref_joint_pos)} != 29")
 
-            if len(ref_joint_pos) == len(self.mujoco_data.qpos) - 7:
-                self.mujoco_data.qpos[7:] = ref_joint_pos
         # 3. 设置 Velocities
         if "joint_vel" in frame:
             ref_joint_vel = frame["joint_vel"]
-            if len(ref_joint_vel) == len(self.mujoco_data.qvel)-6:
-                print("111")
-                self.mujoco_data.qvel[6:] = ref_joint_vel
-
+            print(f" ref_joint_vel: {ref_joint_vel}")
+            if len(ref_joint_vel) == 29:
+                # 同样需要重排序
+                self.mujoco_data.qvel[6:] = ref_joint_vel[self.source_to_mujoco_map]
+            print(f"mujoco_data.qvel[6:]: {self.mujoco_data.qvel[6:]}")
          
         
         if "joint_vel" in frame:
@@ -391,21 +416,21 @@ class MotionTracking(FSMState):
 
     def _get_body_positions(self):
         """从MuJoCo获取13个keypoint body的位置（在body frame下，相对于pelvis）"""
-        if self.mujoco_data is None:
-            return np.zeros((self.num_keypoints, 3), dtype=np.float32)
-        
-        # pelvis位置和四元数 (root)
-        pelvis_pos = self.mujoco_data.body("pelvis").xpos.copy()
-        pelvis_quat = self.mujoco_data.body("pelvis").xquat.copy()  # wxyz
+        xpos = self.state_cmd.xpos[1:]  # 获取所有body的位置数据
+        xquat = self.state_cmd.xquat[1:]  # 获取所有body的四元数数据 (wxyz)
+        pelvis_pos = self.state_cmd.base_pos  # pelvis body的位置
+        pelvis_quat = self.state_cmd.base_quat  # pelvis body的四元数 (wxyz)
+        #print("pelvis_quat:", pelvis_quat)
         
         body_pos = np.zeros((self.num_keypoints, 3), dtype=np.float32)
         for i, body_id in enumerate(self.keypoint_body_ids):
             if body_id >= 0:
-                world_pos = self.mujoco_data.xpos[body_id]
+                world_pos = xpos[body_id]
                 # 1. 平移到pelvis原点
                 pos_rel = world_pos - pelvis_pos
                 # 2. 旋转到body frame（用pelvis四元数的逆）
                 body_pos[i] = self._quat_rotate_inverse(pelvis_quat, pos_rel)
+        #print(self.keypoint_body_ids,self.keypoint_body_ids)
         return body_pos
     
     def _compute_ref_motion_obs(self, frame_idx: int):
@@ -428,21 +453,23 @@ class MotionTracking(FSMState):
             return obs
         
         idx = 0
-       # print(f"pose",self.mujoco_data.qpos[7:])
         # 1. ref_qpos (29) - 参考关节位置（原始值）
         ref_joint_pos = frame["joint_pos"]
         obs[idx:idx+29] = ref_joint_pos
         idx += 29
+
         # 2. ref_kp_pos_gap (39) - 使用subtract_frame_transforms计算位置差
         # 获取当前body的位置和四元数（世界坐标系）
         cur_body_pos_w = np.zeros((self.num_keypoints, 3), dtype=np.float32)
         cur_body_quat_w = np.zeros((self.num_keypoints, 4), dtype=np.float32)
         
-        if self.mujoco_data is not None:
-            for i, body_id in enumerate(self.keypoint_body_ids):
-                if body_id >= 0:
-                    cur_body_pos_w[i] = self.mujoco_data.xpos[body_id].copy()
-                    cur_body_quat_w[i] = self.mujoco_data.xquat[body_id].copy()  # wxyz
+        xpos = self.state_cmd.xpos[1:]  # 获取所有body的位置数据
+        xquat = self.state_cmd.xquat[1:]  # 获取所有body的四元数数据 (wxyz)
+
+        for i, body_id in enumerate(self.keypoint_body_ids):
+            if body_id >= 0:
+                cur_body_pos_w[i] = xpos[body_id].copy()
+                cur_body_quat_w[i] = xquat[body_id].copy()  # wxyz
 
         ref_body_pos_all = frame["body_pos_w"]  # 30×3
         ref_body_quat_all = frame["body_quat_w"]  # 30×4
@@ -516,7 +543,7 @@ class MotionTracking(FSMState):
         return pos_diff.astype(np.float32), quat_diff.astype(np.float32)
     
     
-    def _compute_priv_obs(self, dt=0.02):
+    def _compute_priv_obs(self, dt=0.03):
         """
         计算特权观测 (40维)
         
@@ -528,33 +555,36 @@ class MotionTracking(FSMState):
         """
         obs = np.zeros(self.num_obs_priv, dtype=np.float32)
         
-        if self.mujoco_data is None:
-            return obs
-        
+        xpos = self.state_cmd.xpos[1:]  # 获取所有body的位置数据
         idx = 0
         
         # root_height (1) - pelvis高度
-        pelvis_pos = self.mujoco_data.body("pelvis").xpos.copy()
+        pelvis_pos = xpos[0]
         obs[idx] = pelvis_pos[2]  # z坐标
         idx += 1
         
         # root_linvel_b (3) - body frame下的root线速度
-        try:
-            root_vel = self.mujoco_data.body("pelvis").cvel[3:6].copy()  # 线速度部分
-            obs[idx:idx+3] = root_vel
-        except:
-            obs[idx:idx+3] = 0.0
+     
+        # 使用 base 四元数和 qvel[0:3]（world-frame 线速度），将速度旋转到 body frame
+        base_quat = self.state_cmd.base_quat.copy()  # wxyz
+        root_linvel_world = self.state_cmd.root_vel.copy()
+        root_linvel_b = self._quat_rotate_inverse(base_quat, root_linvel_world)
+        obs[idx:idx+3] = root_linvel_b
+
         idx += 3
         
-        # body_vel (36) - 12个keypoint的速度（不含pelvis，通过差分估计）
-        cur_body_pos = self._get_body_positions()  # (13, 3)
-        cur_body_pos_12 = cur_body_pos[1:]  # (12, 3)
-        prev_body_pos_12 = self.prev_body_pos[1:]  # (12, 3)
-        body_vel = (cur_body_pos_12 - prev_body_pos_12) / dt
-        self.prev_body_pos = cur_body_pos.copy()
-        obs[idx:idx+36] = body_vel.flatten()
+        #cvel = self.state_cmd.cvel[1:,3:]  # (num_bodies, 3)
+        # cvel = cvel[self.keypoint_body_ids[1:]]  # 去掉pelvis (12, 3)
+
+        # body_vel (36) - 12个keypoint的速度（不含pelvis，通过在pelvis局部坐标系下差分估计）
+        cvel = self.state_cmd.cvel[1:,0:3]  # (num_bodies, 3)
+        #cvel = cvel[self.keypoint_body_ids[1:]]  # 去掉pelvis (12, 3)
+        cvel_keypoints = cvel[self.keypoint_body_ids]  # (13, 3)
+        body_vel_w = cvel_keypoints[1:]  # 去掉pelvis (12, 3)
+        body_vel_b = self._quat_rotate_inverse(base_quat, body_vel_w)  # 转到body frame
+        obs[idx:idx+36] = body_vel_b.flatten()
         idx += 36
-        
+
         return obs
         
     def _compute_robot_obs(self):
@@ -587,18 +617,18 @@ class MotionTracking(FSMState):
         # root_angvel_b (3)
         obs[idx:idx+3] = ang_vel
         idx += 3
-        ###
-        
+         
         # projected_gravity_b (3)已完成归一化
         obs[idx:idx+3] = gravity_orientation
         idx += 3
         
         # joint_pos (29) - 全部关节
-        obs[idx:idx+29] = qj
+        obs[idx:idx+29] = qj[self.mujoco_to_source_map]
+
         idx += 29
         
         # joint_vel (29) - 全部关节
-        obs[idx:idx+29] = dqj
+        obs[idx:idx+29] = dqj[self.mujoco_to_source_map]
         idx += 29
         
         # prev_actions (19)
@@ -623,49 +653,41 @@ class MotionTracking(FSMState):
 
         # ==================== 构建robot观测 (123维) ====================
         self.obs_robot = self._compute_robot_obs()
-        
+        #print(f"obsrobot", self.obs_robot)
         
                 
         # ==================== 构建ref_motion观测 (120维) ====================
         self.obs_ref_motion = self._compute_ref_motion_obs(self.counter_step)
 
-        
+        #print(f"obsref", self.obs_ref_motion)
         # ==================== 构建priv观测 (40维) ====================
         self.obs_priv = self._compute_priv_obs()
         #print(f"obspriv", self.obs_priv)
-        breakpoint()
-        # ==================== 详细调试信息 ====================
-        if self.counter_step % 50 == 0:
-            print(f"\n{'='*60}")
-            print(f"Step {self.counter_step}:")
-            print(f"  Robot obs shape: {self.obs_robot.shape}, range: [{self.obs_robot.min():.3f}, {self.obs_robot.max():.3f}]")
-            print(f"  Ref motion obs shape: {self.obs_ref_motion.shape}, range: [{self.obs_ref_motion.min():.3f}, {self.obs_ref_motion.max():.3f}]")
-            print(f"  Priv obs shape: {self.obs_priv.shape}, range: [{self.obs_priv.min():.3f}, {self.obs_priv.max():.3f}]")
-            
-            print(f"  Prev action: {self.prev_action}")
-        
+        # breakpoint()
+               
         
         # ==================== 模型推理 ====================
         obs_robot_tensor = self.obs_robot.reshape(1, -1).astype(np.float32)
         obs_ref_tensor = self.obs_ref_motion.reshape(1, -1).astype(np.float32)  
         obs_priv_tensor = self.obs_priv.reshape(1, -1).astype(np.float32)
 
-        
-        obs_robot_tensor_zero = np.zeros_like(obs_robot_tensor)
-        obs_ref_tensor_zero = np.zeros_like(obs_ref_tensor) 
-        obs_priv_tensor_zero = np.zeros_like(obs_priv_tensor)
-
-        # DEBUG: 使用全0动作测试
-        # self.action = np.zeros(self.num_actions, dtype=np.float32)
-        
-        output = self.ort_session.run(None, {
+        inputs = {
             "priv": obs_priv_tensor,
             "ref_motion_": obs_ref_tensor,
-            "robot": obs_robot_tensor         
-        })[0]
+            "robot": obs_robot_tensor
+        }
+        # 优先获取名为 "action" 的输出（当模型有多个输出时）
+        outputs_info = [(o.name, getattr(o, "shape", None)) for o in self.ort_session.get_outputs()]
+        #print(f"ONNX model outputs: {outputs_info}")
+        out_names = [o.name for o in self.ort_session.get_outputs()]
+        if "linear_6" in out_names:
+            output = self.ort_session.run(["linear_6"], inputs)[0]
+            #print("Using named output 'action' from ONNX model.")
+        else:
+            # 回退到默认第0个输出（兼容旧模型）
+            output = self.ort_session.run(None, inputs)[0]
+            print("Using default first output from ONNX model.")
 
-        if self.counter_step % 100 == 0:
-            print(f"\nStep {self.counter_step}: Model output (raw): {output}")
         self.action = np.squeeze(output)
         
         self.action = np.clip(self.action, -10., 10.)
