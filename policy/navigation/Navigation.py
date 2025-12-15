@@ -104,9 +104,32 @@ class Navigation:
         wz = np.clip(kp_ang * err_yaw, -0.8, 0.8)
         
         # 停止条件：位置和角度都满足
-        if dist < 0.1 and abs(err_yaw) < 0.1:
+        if dist < 0.4 and abs(err_yaw) < 0.1:
              return np.zeros(3, dtype=np.float32)
 
         if self.counter % 400 == 0:
             print(f"[Nav] Step {self.counter}: Cur Pos {current_pos}, Target {self.target_pos}, Dist {dist:.3f}, Err Yaw {err_yaw:.3f}")
         return np.array([vx, vy, wz], dtype=np.float32)
+
+    def is_arrived(self, current_pos, current_quat):
+        """判断当前是否到达目标位置和朝向。"""
+        if self.target_pos is None:
+            return False
+        try:
+            r = R.from_quat([current_quat[1], current_quat[2], current_quat[3], current_quat[0]])
+            current_yaw = r.as_euler('xyz')[2]
+        except:
+            return False
+
+        err_pos = self.target_pos - current_pos
+        dist = np.linalg.norm(err_pos[:2])
+
+        if dist > 0.5:
+            desired_yaw = np.arctan2(err_pos[1], err_pos[0])
+        else:
+            desired_yaw = self.target_yaw if self.target_yaw is not None else current_yaw
+
+        err_yaw = desired_yaw - current_yaw
+        err_yaw = (err_yaw + np.pi) % (2 * np.pi) - np.pi
+
+        return (dist < 0.4) and (abs(err_yaw) < 0.1)

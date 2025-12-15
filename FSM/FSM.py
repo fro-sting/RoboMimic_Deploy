@@ -105,6 +105,11 @@ class FSM:
             self.cur_policy = self.motiontracking_policy
         else:
             pass
+
+    def set_mujoco_data(self, mj_data, mj_model=None):
+        """设置 MuJoCo 数据引用，转发到需要的 policy（例如 MotionTracking）。"""
+        if hasattr(self.motiontracking_policy, 'set_mujoco_data'):
+            self.motiontracking_policy.set_mujoco_data(mj_data, mj_model)
     
     # def set_mujoco_data(self, mj_data, mj_model):
     #     """设置MuJoCo数据引用，用于需要body位置的策略"""

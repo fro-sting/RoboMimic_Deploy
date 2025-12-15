@@ -48,6 +48,7 @@ if __name__ == "__main__":
     
     # 设置MuJoCo数据引用，用于MotionTracking等需要body位置的策略
     #FSM_controller.set_mujoco_data(d, m)
+    FSM_controller.set_mujoco_data(d, m)
     
     # 初始化导航
     navigator = Navigation(PROJECT_ROOT)
@@ -122,6 +123,12 @@ if __name__ == "__main__":
                     # 注意：state_cmd 在循环末尾更新，所以这里使用的是上一帧的状态
                     nav_cmd = navigator.get_action(state_cmd.base_pos, state_cmd.base_quat)
                     state_cmd.vel_cmd[:] = nav_cmd
+
+                    # 如果到达目标，则自动关闭导航模式并清零速度命令
+                    if navigator.is_arrived(state_cmd.base_pos, state_cmd.base_quat):
+                        navigating = False
+                        state_cmd.vel_cmd[:] = 0
+                        print("[导航] 已到达目标，自动关闭导航模式")
                     
                     
                 else:
@@ -146,8 +153,8 @@ if __name__ == "__main__":
                     xpos = d.xpos # 31*3 第一个是world无意义
                     xquat = d.xquat # 31*4 第一个是world无意义
                     cvel = d.cvel # 31*6 第一个是world无意义
-                    root_vel = d.qvel[0:3] #世界坐标系
-                    omega = d.qvel[3:6] # 自身坐标系
+                    root_vel = d.qvel[0:3] #全局线速度
+                    omega = d.qvel[3:6] # 全局角速度
                     gravity_orientation = get_gravity_orientation(quat)
                     
                     state_cmd.q = qj.copy()
